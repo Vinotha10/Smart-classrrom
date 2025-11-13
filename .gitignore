@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtual environments
+venv/
+env/
+*.env
+
+# Models and large files
+models/*.h5
+models/*.joblib
+models/*.pkl
+*.hdf5
+
+# Data
+data/
+datasets/
+*.csv
+*.xlsx
+
+# System
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# Flask cache / build
+instance/
+*.db
+*.sqlite

@@ -1,0 +1,11 @@
+Flask
+flask-cors
+pandas
+numpy
+scikit-learn
+joblib
+tensorflow>=2.9   # optional but used for LSTM; if heavy, you can use RandomForest alternative
+streamlit
+plotly
+requests
+python-dotenv
