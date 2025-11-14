@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>3D Classroom - Simple Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html,body { margin:0; padding:0; height:100%; background:#f7f9fb; }
+    #canvas { width:100%; height:100%; display:block; }
+    .overlay {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      font-family: Arial, sans-serif;
+      background: rgba(255,255,255,0.95);
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+      z-index: 2;
+      color: #111;
+      max-width: 340px;
+    }
+    select, button { margin-top:6px; }
+    .legend { margin-top:8px; font-size:13px; color:#444; }
+  </style>
+</head>
+<body>
+  <div class="overlay">
+    <div><strong>3D Classroom (Simple)</strong></div>
+    <div style="margin-top:6px;">
+      Classroom:
+      <select id="classSelect"></select>
+      <button id="refreshBtn">Refresh</button>
+    </div>
+    <div class="legend" id="infoText">Status: connecting...</div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+  <!-- Three.js -->
+  <script src="https://unpkg.com/three@0.155.0/build/three.min.js"></script>
+
+  <script>
+  // Basic Three.js scene - simple block room with fan, light, AC
+  const canvas = document.getElementById('canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf7f9fb);
+
+  const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
+  camera.position.set(0, 4, 7);
+  camera.lookAt(0,1,0);
+
+  // Better lights: Hemisphere + Directional + point
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+  hemi.position.set(0, 10, 0);
+  scene.add(hemi);
+
+  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+  dir.position.set(5, 10, 7);
+  dir.castShadow = false;
+  scene.add(dir);
+
+  const pointLight = new THREE.PointLight(0xfff2d6, 0.2, 20);
+  pointLight.position.set(0, 3.5, 0);
+  scene.add(pointLight);
+
+  // Floor
+  const floorGeo = new THREE.PlaneGeometry(10, 8);
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI/2;
+  scene.add(floor);
+
+  // Room box (slightly inward faces visible) - using large box with BackSide
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xe9eef2, side: THREE.BackSide });
+  const room = new THREE.Mesh(new THREE.BoxGeometry(10, 5, 8), wallMat);
+  room.position.y = 2.5;
+  scene.add(room);
+
+  // Table / bench (just a box for visual)
+  const benchGeo = new THREE.BoxGeometry(6, 0.2, 1);
+  const benchMat = new THREE.MeshStandardMaterial({ color: 0x8fa3b8 });
+  const bench = new THREE.Mesh(benchGeo, benchMat);
+  bench.position.set(0, 0.6, -1.5);
+  scene.add(bench);
+
+  // Fan group (rotates)
+  const fanHubGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.08, 16);
+  const fanHubMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const fanHub = new THREE.Mesh(fanHubGeo, fanHubMat);
+  fanHub.rotation.x = Math.PI/2;
+  fanHub.position.set(-2, 3.4, -1);
+
+  const fanGroup = new THREE.Group();
+  fanGroup.add(fanHub);
+
+  // blades
+  for (let i=0;i<4;i++){
+    const blade = new THREE.BoxGeometry(0.02, 0.6, 0.12);
+    const bladeMesh = new THREE.Mesh(blade, new THREE.MeshStandardMaterial({ color: 0x222222 }));
+    bladeMesh.position.set(0, 0.3, 0);
+    bladeMesh.rotation.z = i*(Math.PI/2);
+    fanGroup.add(bladeMesh);
+  }
+  fanGroup.position.copy(fanHub.position);
+  scene.add(fanGroup);
+
+  // Lights fixture (ceiling)
+  const lightFixture = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0xffffe6, emissive: 0x000000 }));
+  lightFixture.position.set(1.5, 3.4, 1.2);
+  scene.add(lightFixture);
+
+  // AC unit (box)
+  const acMat = new THREE.MeshStandardMaterial({ color: 0xd0d8e0 });
+  const ac = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.4, 0.25), acMat);
+  ac.position.set(3.9, 3, -2.9);
+  scene.add(ac);
+
+  // people markers group
+  const peopleGroup = new THREE.Group();
+  scene.add(peopleGroup);
+
+  // helpers
+  const infoText = document.getElementById('infoText');
+  const classSelect = document.getElementById('classSelect');
+  const refreshBtn = document.getElementById('refreshBtn');
+
+  // state for animation
+  let currentClass = null;
+  let fanSpeed = 0;
+  let lightOn = false;
+  let acOn = false;
+  let occupancy = 0;
+
+  // responsive resize
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  // simple mouse-drag orbit
+  let isDown = false;
+  let lastX = 0;
+  window.addEventListener('mousedown', (e)=>{ isDown = true; lastX = e.clientX; });
+  window.addEventListener('mouseup', ()=>{ isDown = false; });
+  window.addEventListener('mousemove', (e)=>{
+    if (!isDown) return;
+    const dx = (e.clientX - lastX) * 0.01;
+    camera.position.applyAxisAngle(new THREE.Vector3(0,1,0), dx);
+    lastX = e.clientX;
+  });
+
+  // derive device states client-side using same rule logic as control.py
+  function deriveDevices(predicted, temp){
+    const occ = (predicted !== null && predicted !== undefined) ? predicted : 0;
+    const devices = {};
+    devices.lights = occ >= 1 ? 1 : 0;
+    devices.fan = occ >= 3 ? 1 : 0;
+    devices.ac = (occ >= 10 || (temp && temp > 26)) ? 1 : 0;
+    devices.ac_power_kw = devices.ac ? (1.2 + 0.005 * occ) : 0.0;
+    return devices;
+  }
+
+  // status endpoint (hardwired to your backend)
+  const STATUS_URL = "http://127.0.0.1:5000/status";
+
+  async function fetchStatusOnce(){
+    try {
+      const res = await fetch(STATUS_URL);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      return data;
+    } catch (e) {
+      console.error("status fetch error", e);
+      return null;
+    }
+  }
+
+  async function updateClassList(){
+    const data = await fetchStatusOnce();
+    if (!data) {
+      classSelect.innerHTML = "<option>no-data</option>";
+      infoText.innerText = "No data from server.\nDrag left/right to orbit. Use Refresh if no data.";
+      return;
+    }
+    const keys = Object.keys(data);
+    const prev = classSelect.value;
+    classSelect.innerHTML = "";
+    keys.forEach(k => {
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.text = k;
+      classSelect.add(opt);
+    });
+    if (prev && keys.includes(prev)) classSelect.value = prev;
+    else if (keys.length) classSelect.value = keys[0];
+
+    if (!currentClass && keys.length) currentClass = classSelect.value;
+    infoText.innerText = "Connected. Select a classroom and watch devices change.";
+  }
+
+  classSelect.addEventListener('change', ()=> {
+    currentClass = classSelect.value;
+  });
+  refreshBtn.addEventListener('click', ()=> updateClassList());
+
+  // Render people markers
+  function renderPeople(count){
+    while (peopleGroup.children.length) peopleGroup.remove(peopleGroup.children[0]);
+    const spreadX = 4.0;
+    const cols = 6;
+    for (let i=0;i<count;i++){
+      const r = new THREE.SphereGeometry(0.15, 8, 8);
+      const m = new THREE.MeshStandardMaterial({ color: 0x2b7a78 });
+      const s = new THREE.Mesh(r, m);
+      const x = -spreadX/2 + (i % cols) * 0.8;
+      const z = -1.6 + Math.floor(i/cols) * 0.6;
+      s.position.set(x, 0.25, z);
+      peopleGroup.add(s);
+    }
+  }
+
+  // main update function: fetch and update scene state
+  async function pollAndUpdate(){
+    const data = await fetchStatusOnce();
+    if (!data) {
+      // still animate to show something
+      infoText.innerText = "No data from server. Drag left/right to orbit. Use Refresh if no data.";
+      return;
+    }
+
+    // ensure class list up-to-date
+    if (Object.keys(data).length !== classSelect.options.length){
+      updateClassList();
+    }
+
+    if (!currentClass){
+      const keys = Object.keys(data);
+      if (keys.length) currentClass = keys[0];
+      else return;
+    }
+
+    const clsData = data[currentClass] || {};
+    const latest = clsData.latest || {};
+    // prefer 'pred' (older code) or use latest.predicted_occupancy or compute from latest.occupancy
+    let predicted = clsData.pred;
+    if (predicted === undefined || predicted === null){
+      predicted = latest.predicted_occupancy;
+    }
+    if (predicted === undefined || predicted === null){
+      // fallback use latest occupancy
+      predicted = latest.occupancy;
+    }
+    const temp = latest.temp || 25;
+
+    // derive devices using same rules so frontend animates exactly like backend control would
+    const devices = deriveDevices(predicted, temp);
+
+    // update visuals
+    occupancy = latest.occupancy || 0;
+    renderPeople(Math.min(occupancy, 30));
+
+    // lights
+    lightOn = devices.lights === 1;
+    pointLight.intensity = lightOn ? 1.4 : 0.08;
+    lightFixture.material.emissive = new THREE.Color(lightOn ? 0xfff5d6 : 0x000000);
+    lightFixture.material.emissiveIntensity = lightOn ? 0.8 : 0.0;
+
+    // fan
+    fanSpeed = devices.fan === 1 ? 0.25 + (predicted/20) : 0.0;
+
+    // ac
+    acOn = devices.ac === 1;
+    ac.material.color.set(acOn ? 0xd0f0ff : 0xd0d8e0);
+
+    // info text
+    infoText.innerHTML = `<b>${currentClass}</b> — occ:${latest.occupancy ?? '-'} | pred:${predicted ?? '-'} | lights:${devices.lights} fan:${devices.fan} ac:${devices.ac}`;
+  }
+
+  // animation loop
+  let last = 0;
+  function animate(ts){
+    requestAnimationFrame(animate);
+    const dt = (ts - last) / 1000;
+    last = ts;
+    // rotate fan group if fanSpeed > 0
+    fanGroup.rotation.y += fanSpeed * dt * 10;
+    renderer.render(scene, camera);
+  }
+  animate(0);
+
+  // start
+  updateClassList();
+  // Poll every ~1.8s
+  setInterval(pollAndUpdate, 1800);
+  // initial poll
+  pollAndUpdate();
+
+  </script>
+</body>
+</html>
